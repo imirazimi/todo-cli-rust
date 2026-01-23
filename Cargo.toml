@@ -1,0 +1,23 @@
+[package]
+name = "todo_swamp"
+version = "0.1.0"
+authors = ["Jonn Mostovoy <jm@serokell.io>"]
+edition = "2018"
+
+[dev-dependencies]
+assert_cmd = "1.0.1"
+predicates = "1"
+
+[dependencies]
+nom = "5"
+
+[profile.dev]
+opt-level = 2
+
+[profile.test]
+opt-level = 2
+
+[profile.release]
+lto = true
+strip = true
+panic = "abort"
