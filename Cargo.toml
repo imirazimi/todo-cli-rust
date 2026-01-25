@@ -10,6 +10,8 @@ predicates = "1"
 
 [dependencies]
 nom = "5"
+itoa = "1"
+rayon = "1.11.0"
 
 [profile.dev]
 opt-level = 2
