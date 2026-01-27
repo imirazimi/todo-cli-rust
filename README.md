@@ -147,17 +147,30 @@ done
 ## 🧪 تست‌ها
 
 ```bash
-cargo test
+cargo test --release
 ```
 
-**16 تست** اجرا میشه + **6 benchmark** که ignore شدن:
+**20 تست** اجرا میشه + **6 benchmark** که ignore شدن:
 
-### تست‌های اصلی (16 تست)
+### تست‌های اصلی (20 تست)
+
+#### تست‌های صحت (Correctness)
 - صحت عملکرد add/done/search
 - case-insensitive matching
 - subsequence matching
-- تطابق دقیق با sample.in/sample.out
-- performance tests (100K, 1M, 5M)
+- تطابق دقیق با فیکسچرها:
+  - `sample.in` / `sample.out` (10 کامند)
+  - `Bishibosh.in` / `Bishibosh.out` (33 کامند)
+  - `Flamespike-The-Crawler.in` / `Flamespike-The-Crawler.out` (2217 کامند)
+
+#### تست‌های پرفورمنس (Performance)
+- `test_performance_medium` - 1,000 کامند
+- `test_performance_large` - 10,000 کامند
+- `test_performance_100k` - 100,000 کامند
+- `test_performance_1m` - 1,000,000 کامند
+- `test_performance_5m` - 5,000,000 کامند
+- `test_bishibosh_performance` - فیکسچر Bishibosh
+- `test_flamespike_the_crawler_performance` - فیکسچر Flamespike
 
 ### Benchmark های سنگین (6 تست - ignored)
 برای اجرای benchmark ها:
@@ -167,17 +180,12 @@ cargo test --release -- --ignored
 
 | تست | رکوردها | زمان (release) |
 |-----|---------|----------------|
-| 100K | 100,000 | ~0.05s |
-| 1M | 1,000,000 | ~0.50s |
-| 5M | 5,000,000 | ~2.5s |
-| 10M* | 10,000,000 | ~5s |
-| 15M* | 15,000,000 | ~7.5s |
-| 20M* | 20,000,000 | ~10s |
-| 25M* | 25,000,000 | ~13s |
-| 30M* | 30,000,000 | ~9s |
-| 35M* | 35,000,000 | ~9s |
-
-\* = ignored (فقط با `--ignored` اجرا میشن)
+| 10M | 10,000,000 | ~5s |
+| 15M | 15,000,000 | ~7.5s |
+| 20M | 20,000,000 | ~10s |
+| 25M | 25,000,000 | ~13s |
+| 30M | 30,000,000 | ~9s |
+| 35M | 35,000,000 | ~9s |
 
 ---
 

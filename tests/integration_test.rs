@@ -7,14 +7,13 @@ fn get_binary() -> Command {
 }
 
 fn get_binary_with_timeout(secs: u64) -> Command {
-    let mut cmd = Command::cargo_bin("application").unwrap();
+    let mut cmd = get_binary();
     cmd.timeout(Duration::from_secs(secs));
     cmd
 }
 
 fn normalize_output(output: &str) -> Vec<String> {
-    output
-        .lines()
+    output.lines()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect()
@@ -25,9 +24,21 @@ fn run_and_get_output(input: &str) -> String {
         .write_stdin(input)
         .output()
         .expect("Failed to execute command");
-    
     assert!(output.status.success(), "Command failed: {:?}", output);
     String::from_utf8(output.stdout).unwrap()
+}
+
+/// Run a performance test with given parameters
+fn run_perf_test(name: &str, input: String, timeout_secs: u64, max_secs: f64) {
+    let start = Instant::now();
+    let output = get_binary_with_timeout(timeout_secs)
+        .write_stdin(input)
+        .output()
+        .expect(&format!("{} timed out after {} seconds", name, timeout_secs));
+    assert!(output.status.success(), "{} failed or timed out", name);
+    let elapsed = start.elapsed().as_secs_f64();
+    println!("⏱️  {}: {:.2}s", name, elapsed);
+    assert!(elapsed < max_secs, "{} took {:.2}s, expected < {:.0}s", name, elapsed, max_secs);
 }
 
 #[test]
@@ -42,6 +53,24 @@ fn test_sample_input() {
     actual_lines.sort();
     
     assert_eq!(expected_lines, actual_lines, "Output mismatch!\nExpected:\n{}\nActual:\n{}", expected, actual);
+}
+
+#[test]
+fn test_bishibosh_input() {
+    let input = fs::read_to_string("tests/fixtures/Bishibosh.in").unwrap();
+    let expected = fs::read_to_string("tests/fixtures/Bishibosh.out").unwrap();
+    let actual = run_and_get_output(&input);
+    
+    assert_eq!(expected, actual, "Bishibosh output mismatch!");
+}
+
+#[test]
+fn test_flamespike_the_crawler_input() {
+    let input = fs::read_to_string("tests/fixtures/Flamespike-The-Crawler.in").unwrap();
+    let expected = fs::read_to_string("tests/fixtures/Flamespike-The-Crawler.out").unwrap();
+    let actual = run_and_get_output(&input);
+    
+    assert_eq!(expected, actual, "Flamespike-The-Crawler output mismatch");
 }
 
 #[test]
@@ -132,16 +161,7 @@ fn test_performance_medium() {
     for i in 0..500 {
         input.push_str(&format!("search #{}\n", TAGS[i % 10]));
     }
-    
-    // Use timeout to enforce 10 second limit
-    let start = Instant::now();
-    let output = get_binary_with_timeout(10)
-        .write_stdin(input)
-        .output()
-        .expect("Command timed out after 10 seconds");
-    assert!(output.status.success(), "Performance test failed or timed out");
-    let elapsed = start.elapsed().as_secs_f64();
-    println!("⏱️  test_performance_medium: {:.2}s", elapsed);
+    run_perf_test("test_performance_medium", input, 10, 10.0);
 }
 
 #[test]
@@ -161,16 +181,7 @@ fn test_performance_large() {
     for i in 0..5000 {
         input.push_str(&format!("search #{}\n", WORDS[i % 50]));
     }
-    
-    // Use timeout to enforce 10 second limit
-    let start = Instant::now();
-    let output = get_binary_with_timeout(10)
-        .write_stdin(input)
-        .output()
-        .expect("Command timed out after 10 seconds");
-    assert!(output.status.success(), "Performance test failed or timed out");
-    let elapsed = start.elapsed().as_secs_f64();
-    println!("⏱️  test_performance_large: {:.2}s", elapsed);
+    run_perf_test("test_performance_large", input, 10, 10.0);
 }
 
 // Helper to generate random-ish words based on index
@@ -465,3 +476,34 @@ fn test_performance_35m() {
     println!("⏱️  test_performance_35m: {:.2}s", elapsed);
     assert!(elapsed < 15.0, "35M commands took {:.2}s, expected < 15s", elapsed);
 }
+
+#[test]
+fn test_bishibosh_performance() {
+    let input = fs::read_to_string("tests/fixtures/Bishibosh.in").unwrap();
+    
+    let start = Instant::now();
+    let output = get_binary_with_timeout(10)
+        .write_stdin(input)
+        .output()
+        .expect("Bishibosh fixture timed out after 10 seconds");
+    assert!(output.status.success(), "Bishibosh fixture test failed or timed out");
+    let elapsed = start.elapsed().as_secs_f64();
+    println!("⏱️  test_bishibosh_performance: {:.2}s", elapsed);
+    assert!(elapsed < 10.0, "Bishibosh fixture took {:.2}s, expected < 10s", elapsed);
+}
+
+#[test]
+fn test_flamespike_the_crawler_performance() {
+    let input = fs::read_to_string("tests/fixtures/Flamespike-The-Crawler.in").unwrap();
+    
+    let start = Instant::now();
+    let output = get_binary_with_timeout(10)
+        .write_stdin(input)
+        .output()
+        .expect("Flamespike-The-Crawler fixture timed out after 10 seconds");
+    assert!(output.status.success(), "Flamespike-The-Crawler fixture test failed or timed out");
+    let elapsed = start.elapsed().as_secs_f64();
+    println!("⏱️  test_flamespike_the_crawler_performance: {:.2}s", elapsed);
+    assert!(elapsed < 10.0, "Flamespike-The-Crawler fixture took {:.2}s, expected < 10s", elapsed);
+}
+

@@ -4,6 +4,7 @@ use rayon::prelude::*;
 
 use crate::SearchParams;
 
+/// Check if `sub` is a subsequence of `text` (characters appear in order but not necessarily contiguous)
 #[inline(always)]
 fn is_subsequence(sub: &[u8], text: &[u8]) -> bool {
     if sub.is_empty() { return true; }
@@ -18,39 +19,37 @@ fn is_subsequence(sub: &[u8], text: &[u8]) -> bool {
     false
 }
 
+/// Bitmask of which letters (a-z) are present in the string
 #[inline(always)]
 fn char_mask(s: &[u8]) -> u32 {
     let mut mask = 0u32;
     for &c in s {
-        if c >= b'a' && c <= b'z' {
+        if c.is_ascii_lowercase() {
             mask |= 1 << (c - b'a');
-        } else if c >= b'A' && c <= b'Z' {
+        } else if c.is_ascii_uppercase() {
             mask |= 1 << (c - b'A');
         }
     }
     mask
 }
 
+/// Convert string to lowercase bytes
 #[inline(always)]
 fn to_lower_bytes(s: &str) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(s.len());
-    for &c in s.as_bytes() {
-        buf.push(if c >= b'A' && c <= b'Z' { c + 32 } else { c });
-    }
-    buf
+    s.as_bytes().iter().map(|&c| c.to_ascii_lowercase()).collect()
 }
 
-// Reusable buffer for lowercase conversion (thread-local for safety)
-thread_local! {
-    static LOWER_BUF: std::cell::RefCell<String> = std::cell::RefCell::new(String::with_capacity(64));
-}
-
+/// Apply function with lowercase version of string (uses thread-local buffer)
 #[inline]
 fn with_lower<F, R>(s: &str, f: F) -> R 
 where F: FnOnce(&str) -> R {
-    LOWER_BUF.with(|buf| {
+    thread_local! {
+        static BUF: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+    }
+    BUF.with(|buf| {
         let mut buf = buf.borrow_mut();
         buf.clear();
+        buf.reserve(s.len());
         for c in s.chars() {
             buf.extend(c.to_lowercase());
         }
@@ -136,6 +135,9 @@ pub struct TodoList {
     
     // Fast mode: skip subsequence search for performance
     fast_mode: bool,
+    
+    // Concise mode: output only indices without descriptions/tags
+    concise_mode: bool,
 }
 
 impl Default for TodoList {
@@ -151,6 +153,7 @@ impl Default for TodoList {
             tag_map: HashMap::new(),
             tag_char_index: Default::default(),
             fast_mode: false,
+            concise_mode: false,
         }
     }
 }
@@ -160,6 +163,14 @@ impl TodoList {
     
     #[must_use] pub fn with_mode(fast_mode: bool) -> Self {
         Self { fast_mode, ..Self::default() }
+    }
+    
+    #[must_use] pub fn with_modes(fast_mode: bool, concise_mode: bool) -> Self {
+        Self { fast_mode, concise_mode, ..Self::default() }
+    }
+    
+    #[must_use] pub fn is_concise(&self) -> bool {
+        self.concise_mode
     }
 
     pub fn push(&mut self, description: Description, tags: Vec<Tag>) -> Index {
@@ -182,55 +193,44 @@ impl TodoList {
     }
     
     fn add_word(&mut self, lower: &str, item_idx: u32) {
-        if let Some(&idx) = self.word_map.get(lower) {
-            self.words[idx as usize].items.push(item_idx);
-        } else {
-            let word_idx = self.words.len() as u32;
-            let bytes: Box<[u8]> = lower.as_bytes().into();
-            let mask = char_mask(&bytes);
-            let len = bytes.len().min(255) as u8;
-            
-            // Add to char index for each unique char
-            let mut added = 0u32;
-            for &c in bytes.iter() {
-                if c >= b'a' && c <= b'z' {
-                    let ci = (c - b'a') as usize;
-                    let bit = 1u32 << ci;
-                    if (added & bit) == 0 {
-                        added |= bit;
-                        self.char_index[ci].push(word_idx);
-                    }
-                }
-            }
-            
-            self.words.push(WordInfo { lower: bytes, mask, len, items: vec![item_idx] });
-            self.word_map.insert(lower.into(), word_idx);
-        }
+        self.add_indexed_term(lower, item_idx, false);
     }
     
     fn add_tag(&mut self, lower: &str, item_idx: u32) {
-        if let Some(&idx) = self.tag_map.get(lower) {
-            self.tags_vec[idx as usize].items.push(item_idx);
+        self.add_indexed_term(lower, item_idx, true);
+    }
+    
+    /// Add a term (word or tag) to the appropriate index
+    fn add_indexed_term(&mut self, lower: &str, item_idx: u32, is_tag: bool) {
+        let (terms, term_map, char_idx) = if is_tag {
+            (&mut self.tags_vec, &mut self.tag_map, &mut self.tag_char_index)
         } else {
-            let tag_idx = self.tags_vec.len() as u32;
+            (&mut self.words, &mut self.word_map, &mut self.char_index)
+        };
+        
+        if let Some(&idx) = term_map.get(lower) {
+            terms[idx as usize].items.push(item_idx);
+        } else {
+            let term_idx = terms.len() as u32;
             let bytes: Box<[u8]> = lower.as_bytes().into();
             let mask = char_mask(&bytes);
             let len = bytes.len().min(255) as u8;
             
+            // Add to char index for each unique letter
             let mut added = 0u32;
             for &c in bytes.iter() {
-                if c >= b'a' && c <= b'z' {
+                if c.is_ascii_lowercase() {
                     let ci = (c - b'a') as usize;
                     let bit = 1u32 << ci;
                     if (added & bit) == 0 {
                         added |= bit;
-                        self.tag_char_index[ci].push(tag_idx);
+                        char_idx[ci].push(term_idx);
                     }
                 }
             }
             
-            self.tags_vec.push(WordInfo { lower: bytes, mask, len, items: vec![item_idx] });
-            self.tag_map.insert(lower.into(), tag_idx);
+            terms.push(WordInfo { lower: bytes, mask, len, items: vec![item_idx] });
+            term_map.insert(lower.into(), term_idx);
         }
     }
 
@@ -247,10 +247,9 @@ impl TodoList {
     #[must_use] 
     pub fn search(&self, sp: &SearchParams) -> Vec<&TodoItem> {
         if sp.words.is_empty() && sp.tags.is_empty() {
-            // Reverse order: newest first (reverse insertion order per PDF spec)
+            // Natural order (ascending by index)
             return self.items.iter()
                 .enumerate()
-                .rev()
                 .filter(|(i, _)| !self.done_flags[*i])
                 .map(|(_, item)| item)
                 .collect();
@@ -269,19 +268,17 @@ impl TodoList {
         for (i, sw) in sp.words.iter().enumerate() {
             let search_bytes = to_lower_bytes(&sw.0);
             
-            // Fast path: exact word match
-            if let Some(&word_idx) = self.word_map.get(unsafe { std::str::from_utf8_unchecked(&search_bytes) }) {
-                let items = &self.words[word_idx as usize].items;
-                word_matches.push((i, items));
-                if items.len() < smallest_size {
-                    smallest_size = items.len();
-                    smallest_idx = Some(word_matches.len() - 1);
-                }
-                continue;
-            }
-            
-            // In fast mode, skip non-exact matches for performance
+            // In fast mode, only do exact word matches for performance
             if self.fast_mode {
+                if let Some(&word_idx) = self.word_map.get(unsafe { std::str::from_utf8_unchecked(&search_bytes) }) {
+                    let items = &self.words[word_idx as usize].items;
+                    word_matches.push((i, items));
+                    if items.len() < smallest_size {
+                        smallest_size = items.len();
+                        smallest_idx = Some(word_matches.len() - 1);
+                    }
+                    continue;
+                }
                 return Vec::new();
             }
             
@@ -308,8 +305,19 @@ impl TodoList {
                 .par_iter()
                 .filter_map(|&word_idx| {
                     let w = &self.words[word_idx as usize];
-                    if w.len >= search_len && (search_mask & w.mask) == search_mask && is_subsequence(&search_bytes, &w.lower) {
-                        Some(&w.items[..])
+                    // Check word length first for performance
+                    if w.len >= search_len {
+                        // Then check character mask for quick rejection
+                        if (search_mask & w.mask) == search_mask {
+                            // Finally, verify exact subsequence match
+                            if is_subsequence(&search_bytes, &w.lower) {
+                                Some(&w.items[..])
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
@@ -320,18 +328,11 @@ impl TodoList {
             matching.sort_unstable();
             matching.dedup();
             
-            // Store for later - can't use reference here so we'll handle differently
-            // For now, use old approach for non-exact matches
-            if word_matches.is_empty() {
-                // This is first term and it's non-exact
-                candidates = Some(matching);
-            } else {
-                // Intersect with existing candidates
-                candidates = Some(match candidates.take() {
-                    None => matching,
-                    Some(c) => intersect_sorted(&c, &matching),
-                });
-            }
+            // Intersect with existing candidates or set as initial
+            candidates = Some(match candidates.take() {
+                None => matching,
+                Some(c) => intersect_sorted(&c, &matching),
+            });
             
             if candidates.as_ref().map_or(false, |c| c.is_empty()) { 
                 return Vec::new(); 
@@ -362,20 +363,19 @@ impl TodoList {
         for st in &sp.tags {
             let search_bytes = to_lower_bytes(&st.0);
             
-            if let Some(&tag_idx) = self.tag_map.get(unsafe { std::str::from_utf8_unchecked(&search_bytes) }) {
-                let matching = &self.tags_vec[tag_idx as usize].items;
-                candidates = Some(match candidates {
-                    None => matching.to_vec(),
-                    Some(c) => intersect_sorted(&c, matching),
-                });
-                if candidates.as_ref().map_or(true, |c| c.is_empty()) { 
-                    return Vec::new(); 
-                }
-                continue;
-            }
-            
-            // In fast mode, skip non-exact tag matches for performance
+            // In fast mode, only do exact tag matches for performance
             if self.fast_mode {
+                if let Some(&tag_idx) = self.tag_map.get(unsafe { std::str::from_utf8_unchecked(&search_bytes) }) {
+                    let matching = &self.tags_vec[tag_idx as usize].items;
+                    candidates = Some(match candidates {
+                        None => matching.to_vec(),
+                        Some(c) => intersect_sorted(&c, matching),
+                    });
+                    if candidates.as_ref().map_or(true, |c| c.is_empty()) { 
+                        return Vec::new(); 
+                    }
+                    continue;
+                }
                 return Vec::new();
             }
             
@@ -402,8 +402,16 @@ impl TodoList {
                 .par_iter()
                 .filter_map(|&tag_idx| {
                     let t = &self.tags_vec[tag_idx as usize];
-                    if t.len >= search_len && (search_mask & t.mask) == search_mask && is_subsequence(&search_bytes, &t.lower) {
-                        Some(&t.items[..])
+                    if t.len >= search_len {
+                        if (search_mask & t.mask) == search_mask {
+                            if is_subsequence(&search_bytes, &t.lower) {
+                                Some(&t.items[..])
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
@@ -431,8 +439,8 @@ impl TodoList {
                 
                 // Imperative approach for final collection
                 let mut result: Vec<&TodoItem> = Vec::with_capacity(c.len().min(limit));
-                // Reverse order: newest first (reverse insertion order per PDF spec)
-                for &i in c.iter().rev() {
+                // Natural order (ascending by index)
+                for &i in c.iter() {
                     if !done_flags[i as usize] {
                         result.push(&self.items[i as usize]);
                         if result.len() >= limit { break; }
